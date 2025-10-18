@@ -3,18 +3,21 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"fitonex/backend/internal/httpx"
 	"fitonex/backend/internal/models"
+	"fitonex/backend/internal/moderation"
 	"fitonex/backend/internal/pagination"
 
 	"github.com/go-chi/chi/v5"
 )
 
-// GetNearbyGyms handles getting nearby gyms
+// GetNearbyGyms returns gyms ordered by distance with optional caching.
 func (h *Handlers) GetNearbyGyms(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	latStr := query.Get("lat")
@@ -48,7 +51,7 @@ func (h *Handlers) GetNearbyGyms(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if radius > 50 {
-			radius = 50 // clamp to reasonable radius to avoid heavy queries
+			radius = 50
 		}
 	}
 
@@ -81,6 +84,15 @@ func (h *Handlers) GetNearbyGyms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cacheKey := fmt.Sprintf("NEARBY:%.4f:%.4f:%.2f:%d:%s", lat, lng, radius, limit, cursorStr)
+	var page pagination.Paginated[models.NearbyGym]
+	if h.cache != nil {
+		if ok, _ := h.cache.GetJSON(r.Context(), cacheKey, &page); ok {
+			httpx.WriteJSONWithCache(w, http.StatusOK, page, h.config.CacheTTLNearby)
+			return
+		}
+	}
+
 	page, err := service.GetNearby(lat, lng, radius, limit, cursor)
 	if err != nil {
 		if errors.Is(err, pagination.ErrInvalidLimit) {
@@ -96,111 +108,144 @@ func (h *Handlers) GetNearbyGyms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, page)
-}
-
-// GetGym handles getting a specific gym
-func (h *Handlers) GetGym(w http.ResponseWriter, r *http.Request) {
-	gymID := chi.URLParam(r, "id")
-
-	gym, err := h.store.Gyms.GetByID(gymID)
-	if err != nil {
-		http.Error(w, "Gym not found", http.StatusNotFound)
-		return
+	if h.cache != nil {
+		_ = h.cache.SetJSON(r.Context(), cacheKey, page, h.config.CacheTTLNearby)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(gym)
+	if h.analytics != nil {
+		uid, _ := userIDFromContext(r)
+		h.analytics.EmitEvent(r.Context(), uid, "map_opened", map[string]any{
+			"lat":    lat,
+			"lng":    lng,
+			"radius": radius,
+		})
+	}
+
+	httpx.WriteJSONWithCache(w, http.StatusOK, page, h.config.CacheTTLNearby)
 }
 
-// GetGymMachines handles getting machines for a gym
+// GetGym returns a gym with cache awareness.
+func (h *Handlers) GetGym(w http.ResponseWriter, r *http.Request) {
+	gymID := chi.URLParam(r, "id")
+	cacheKey := fmt.Sprintf("GYM:%s", gymID)
+	var gym models.Gym
+	if h.cache != nil {
+		if ok, _ := h.cache.GetJSON(r.Context(), cacheKey, &gym); ok {
+			httpx.WriteJSONWithCache(w, http.StatusOK, gym, h.config.CacheTTLGym)
+			return
+		}
+	}
+
+	result, err := h.store.Gyms.GetByID(gymID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusNotFound, httpx.ErrorCodeNotFound, "gym not found")
+		return
+	}
+	gym = *result
+
+	if h.cache != nil {
+		_ = h.cache.SetJSON(r.Context(), cacheKey, gym, h.config.CacheTTLGym)
+	}
+
+	httpx.WriteJSONWithCache(w, http.StatusOK, gym, h.config.CacheTTLGym)
+}
+
+// GetGymMachines returns machines for a gym.
 func (h *Handlers) GetGymMachines(w http.ResponseWriter, r *http.Request) {
 	gymID := chi.URLParam(r, "id")
 
 	machines, err := h.store.Gyms.GetMachines(gymID)
 	if err != nil {
-		http.Error(w, "Failed to fetch gym machines", http.StatusInternalServerError)
+		httpx.WriteAPIError(w, httpx.WrapError(err, http.StatusInternalServerError, httpx.ErrorCodeInternal, "failed to fetch gym machines"))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(machines)
+	httpx.WriteJSON(w, http.StatusOK, machines)
 }
 
-// GetGymPrices handles getting prices for a gym
+// GetGymPrices returns price plans for a gym.
 func (h *Handlers) GetGymPrices(w http.ResponseWriter, r *http.Request) {
 	gymID := chi.URLParam(r, "id")
 
 	prices, err := h.store.Gyms.GetPrices(gymID)
 	if err != nil {
-		http.Error(w, "Failed to fetch gym prices", http.StatusInternalServerError)
+		httpx.WriteAPIError(w, httpx.WrapError(err, http.StatusInternalServerError, httpx.ErrorCodeInternal, "failed to fetch gym prices"))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(prices)
+	httpx.WriteJSON(w, http.StatusOK, prices)
 }
 
-// CreateGymReviewRequest represents the create review request
 type CreateGymReviewRequest struct {
 	Rating  int    `json:"rating"`
 	Comment string `json:"comment"`
 }
 
-// CreateGymReview handles creating a gym review
+// CreateGymReview handles moderated review creation.
 func (h *Handlers) CreateGymReview(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("userID").(string)
 	gymID := chi.URLParam(r, "id")
 
 	var req CreateGymReviewRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		httpx.WriteError(w, http.StatusBadRequest, httpx.ErrorCodeBadRequest, "invalid request body")
 		return
 	}
 
-	// Validate input
 	if req.Rating < 1 || req.Rating > 5 {
-		http.Error(w, "Rating must be between 1 and 5", http.StatusBadRequest)
+		httpx.WriteError(w, http.StatusBadRequest, httpx.ErrorCodeBadRequest, "rating must be between 1 and 5")
 		return
+	}
+
+	if h.moderationEnabled {
+		if err := moderation.ValidateReview(req.Comment); err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, httpx.ErrorCodeBadRequest, err.Error())
+			return
+		}
 	}
 
 	review, err := h.store.Gyms.CreateReview(gymID, userID, req.Rating, req.Comment)
 	if err != nil {
-		http.Error(w, "Failed to create review", http.StatusInternalServerError)
+		httpx.WriteAPIError(w, httpx.WrapError(err, http.StatusInternalServerError, httpx.ErrorCodeInternal, "failed to create review"))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(review)
+	if h.cache != nil {
+		_ = h.cache.Delete(r.Context(), fmt.Sprintf("GYM:%s", gymID))
+		_ = h.cache.InvalidatePrefix(r.Context(), "NEARBY:", 200)
+	}
+
+	if h.analytics != nil {
+		h.analytics.EmitEvent(r.Context(), userID, "review_created", map[string]any{
+			"gym_id": gymID,
+			"rating": req.Rating,
+		})
+	}
+
+	httpx.WriteJSON(w, http.StatusCreated, review)
 }
 
-// GetGymReviews handles getting reviews for a gym
+// GetGymReviews returns paginated reviews.
 func (h *Handlers) GetGymReviews(w http.ResponseWriter, r *http.Request) {
 	gymID := chi.URLParam(r, "id")
-	
-	// Get pagination parameters
-	cursor := r.URL.Query().Get("cursor")
-	limitStr := r.URL.Query().Get("limit")
-	
-	limit := 20 // default limit
-	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 50 {
-			limit = l
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 && v <= 50 {
+			limit = v
 		}
 	}
+	cursor := r.URL.Query().Get("cursor")
 
 	reviews, nextCursor, err := h.store.Gyms.GetReviews(gymID, cursor, limit)
 	if err != nil {
-		http.Error(w, "Failed to fetch reviews", http.StatusInternalServerError)
+		httpx.WriteAPIError(w, httpx.WrapError(err, http.StatusInternalServerError, httpx.ErrorCodeInternal, "failed to fetch reviews"))
 		return
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"reviews": reviews,
 		"next":    nextCursor,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	httpx.WriteJSON(w, http.StatusOK, response)
 }

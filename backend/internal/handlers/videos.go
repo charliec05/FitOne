@@ -12,9 +12,10 @@ import (
 
 	"fitonex/backend/internal/httpx"
 	"fitonex/backend/internal/models"
+	"fitonex/backend/internal/moderation"
 	"fitonex/backend/internal/pagination"
-    "fitonex/backend/internal/storage"
-    videosstore "fitonex/backend/internal/store/videos"
+	"fitonex/backend/internal/storage"
+	videosstore "fitonex/backend/internal/store/videos"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -110,7 +111,7 @@ func (h *Handlers) GetUploadURL(w http.ResponseWriter, r *http.Request) {
 	videoKey := fmt.Sprintf("videos/%s%s", uuid.NewString(), ext)
 	thumbKey := fmt.Sprintf("videos/thumbs/%s.jpg", uuid.NewString())
 
-	videoURL, err := storageSvc.PresignPut(r.Context(), videoKey, req.ContentType, req.Bytes, uploadURLTTL)
+    videoURL, err := storageSvc.PresignPut(r.Context(), videoKey, req.ContentType, req.Bytes, uploadURLTTL)
 	if err != nil {
 		httpx.WriteAPIError(w, httpx.WrapError(err, http.StatusInternalServerError, httpx.ErrorCodeInternal, "failed to generate upload url"))
 		return
@@ -122,12 +123,20 @@ func (h *Handlers) GetUploadURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, UploadURLResponse{
-		UploadURL:      videoURL,
-		VideoKey:       videoKey,
-		ThumbUploadURL: thumbURL,
-		ThumbKey:       thumbKey,
-	})
+    resp := UploadURLResponse{
+        UploadURL:      videoURL,
+        VideoKey:       videoKey,
+        ThumbUploadURL: thumbURL,
+        ThumbKey:       thumbKey,
+    }
+
+    if h.analytics != nil {
+        h.analytics.EmitEvent(r.Context(), userID, "upload_started", map[string]any{
+            "machine_id": req.MachineID,
+        })
+    }
+
+    httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 // FinalizeVideo persists metadata for an uploaded video.
@@ -144,10 +153,10 @@ func (h *Handlers) FinalizeVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateFinalizeRequest(&req); err != nil {
-		httpx.WriteAPIError(w, err)
-		return
-	}
+    if err := h.validateFinalizeRequest(&req); err != nil {
+        httpx.WriteAPIError(w, err)
+        return
+    }
 
 	machineSvc := h.getMachineService()
 	if machineSvc == nil {
@@ -182,13 +191,32 @@ func (h *Handlers) FinalizeVideo(w http.ResponseWriter, r *http.Request) {
 		duration = &req.DurationSec
 	}
 
-	video, err := videoSvc.Create(req.MachineID, userID, title, description, req.VideoKey, thumbKey, duration)
-	if err != nil {
-		httpx.WriteAPIError(w, httpx.WrapError(err, http.StatusInternalServerError, httpx.ErrorCodeInternal, "failed to create video"))
-		return
-	}
+    video, err := videoSvc.Create(req.MachineID, userID, title, description, req.VideoKey, thumbKey, duration)
+    if err != nil {
+        httpx.WriteAPIError(w, httpx.WrapError(err, http.StatusInternalServerError, httpx.ErrorCodeInternal, "failed to create video"))
+        return
+    }
 
-	httpx.WriteJSON(w, http.StatusCreated, video)
+    storageSvc := h.storageService()
+    if storageSvc == nil {
+        if service, err := storage.NewS3Service(h.config); err == nil {
+            h.SetObjectStorage(service)
+            storageSvc = service
+        }
+    }
+    if storageSvc != nil {
+        if playURL, err := storageSvc.SignedGet(r.Context(), video.VideoKey, h.cdnBaseURL, 5*time.Minute); err == nil {
+            video.PlayURL = playURL
+        }
+    }
+
+    if h.analytics != nil {
+        h.analytics.EmitEvent(r.Context(), userID, "video_uploaded", map[string]any{
+            "machine_id": req.MachineID,
+        })
+    }
+
+    httpx.WriteJSON(w, http.StatusCreated, video)
 }
 
 // GetVideos returns a paginated list of videos for a machine.
@@ -228,7 +256,7 @@ func (h *Handlers) GetVideos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	page, err := videoSvc.ListByMachine(machineID, limit, cursorPtr)
+    page, err := videoSvc.ListByMachine(machineID, limit, cursorPtr)
 	if err != nil {
 		if errors.Is(err, pagination.ErrInvalidLimit) {
 			httpx.WriteError(w, http.StatusBadRequest, httpx.ErrorCodeBadRequest, "limit must be greater than zero")
@@ -243,7 +271,25 @@ func (h *Handlers) GetVideos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, page)
+    storageSvc := h.storageService()
+    if storageSvc == nil {
+        service, err := storage.NewS3Service(h.config)
+        if err != nil {
+            httpx.WriteAPIError(w, httpx.WrapError(err, http.StatusInternalServerError, httpx.ErrorCodeInternal, "storage unavailable"))
+            return
+        }
+        h.SetObjectStorage(service)
+        storageSvc = service
+    }
+
+    for i := range page.Items {
+        playURL, err := storageSvc.SignedGet(r.Context(), page.Items[i].VideoKey, h.cdnBaseURL, 5*time.Minute)
+        if err == nil {
+            page.Items[i].PlayURL = playURL
+        }
+    }
+
+    httpx.WriteJSONWithCache(w, http.StatusOK, page, 30*time.Second)
 }
 
 // GetVideo returns a single video by ID.
@@ -264,6 +310,12 @@ func (h *Handlers) GetVideo(w http.ResponseWriter, r *http.Request) {
         }
         httpx.WriteAPIError(w, httpx.WrapError(err, http.StatusInternalServerError, httpx.ErrorCodeInternal, "failed to fetch video"))
         return
+    }
+
+    if storageSvc := h.storageService(); storageSvc != nil {
+        if playURL, err := storageSvc.SignedGet(r.Context(), video.VideoKey, h.cdnBaseURL, 5*time.Minute); err == nil {
+            video.PlayURL = playURL
+        }
     }
 
     httpx.WriteJSON(w, http.StatusOK, video)
@@ -347,10 +399,16 @@ func (h *Handlers) validateUploadRequest(req *UploadURLRequest) *httpx.APIError 
 		return httpx.NewError(http.StatusBadRequest, httpx.ErrorCodeBadRequest, message)
 	}
 
+	if h.moderationEnabled {
+		if err := moderation.ValidateVideoMeta(req.Title, req.Description); err != nil {
+			return httpx.NewError(http.StatusBadRequest, httpx.ErrorCodeBadRequest, err.Error())
+		}
+	}
+
 	return nil
 }
 
-func validateFinalizeRequest(req *FinalizeVideoRequest) *httpx.APIError {
+func (h *Handlers) validateFinalizeRequest(req *FinalizeVideoRequest) *httpx.APIError {
 	req.MachineID = strings.TrimSpace(req.MachineID)
 	if req.MachineID == "" {
 		return httpx.NewError(http.StatusBadRequest, httpx.ErrorCodeBadRequest, "machine_id is required")
@@ -368,6 +426,12 @@ func validateFinalizeRequest(req *FinalizeVideoRequest) *httpx.APIError {
 
 	if req.DurationSec < 0 {
 		return httpx.NewError(http.StatusBadRequest, httpx.ErrorCodeBadRequest, "duration_sec must be non-negative")
+	}
+
+	if h.moderationEnabled {
+		if err := moderation.ValidateVideoMeta(req.Title, req.Description); err != nil {
+			return httpx.NewError(http.StatusBadRequest, httpx.ErrorCodeBadRequest, err.Error())
+		}
 	}
 
 	return nil

@@ -26,6 +26,12 @@ func (h *Handlers) CheckinToday(w http.ResponseWriter, r *http.Request) {
         status = http.StatusCreated
     }
 
+    if h.analytics != nil {
+        h.analytics.EmitEvent(r.Context(), userID, "checkin_done", map[string]any{
+            "inserted": inserted,
+        })
+    }
+
     httpx.WriteJSON(w, status, struct {
         Checkin  models.Checkin `json:"checkin"`
         Inserted bool           `json:"inserted"`

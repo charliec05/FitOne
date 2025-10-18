@@ -9,6 +9,7 @@ import (
 	"fitonex/backend/internal/store/exercises"
 	"fitonex/backend/internal/store/gyms"
 	"fitonex/backend/internal/store/machines"
+	"fitonex/backend/internal/store/moderation"
 	"fitonex/backend/internal/store/migrations"
 	"fitonex/backend/internal/store/users"
 	"fitonex/backend/internal/store/videos"
@@ -21,13 +22,14 @@ import (
 type Store struct {
 	db     *sql.DB
 	config *config.Config
-	Users     *users.Store
+	Users      *users.Store
 	Workouts   *workouts.Store
-	Gyms      *gyms.Store
-	Machines  *machines.Store
-	Videos    *videos.Store
-	Checkins  *checkins.Store
-	Exercises *exercises.Store
+	Gyms       *gyms.Store
+	Machines   *machines.Store
+	Videos     *videos.Store
+	Checkins   *checkins.Store
+	Exercises  *exercises.Store
+	Moderation *moderation.Store
 }
 
 // New creates a new store instance
@@ -59,6 +61,7 @@ func (s *Store) Connect() error {
 	s.Videos = videos.New(s.db)
 	s.Checkins = checkins.New(s.db)
 	s.Exercises = exercises.New(s.db)
+	s.Moderation = moderation.New(s.db)
 
 	return nil
 }
@@ -69,6 +72,13 @@ func (s *Store) Close() error {
 		return s.db.Close()
 	}
 	return nil
+}
+
+func (s *Store) Ping() error {
+	if s.db == nil {
+		return fmt.Errorf("database not connected")
+	}
+	return s.db.Ping()
 }
 
 // MigrateUp runs all pending migrations

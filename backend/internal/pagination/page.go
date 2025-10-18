@@ -33,6 +33,12 @@ type DistanceAscCursor struct {
 	ID        string  `json:"id"`
 }
 
+// ScoreDescCursor models cursor based on similarity/score desc.
+type ScoreDescCursor struct {
+	Score float64 `json:"score"`
+	ID    string  `json:"id"`
+}
+
 // TimeDescPage builds a paginated response for time DESC ordered lists.
 func TimeDescPage[T any](items []T, limit int, extractor func(item T) TimeDescCursor) (Paginated[T], error) {
 	return buildPage(items, limit, func(item T) (any, error) {
@@ -50,6 +56,17 @@ func DistanceAscPage[T any](items []T, limit int, extractor func(item T) Distanc
 	return buildPage(items, limit, func(item T) (any, error) {
 		cursor := extractor(item)
 		if cursor.ID == "" || math.IsNaN(cursor.DistanceM) || math.IsInf(cursor.DistanceM, 0) {
+			return nil, ErrInvalidCursorValue
+		}
+		return cursor, nil
+	})
+}
+
+// ScoreDescPage builds a paginated response for similarity ordered lists.
+func ScoreDescPage[T any](items []T, limit int, extractor func(item T) ScoreDescCursor) (Paginated[T], error) {
+	return buildPage(items, limit, func(item T) (any, error) {
+		cursor := extractor(item)
+		if cursor.ID == "" || math.IsNaN(cursor.Score) || math.IsInf(cursor.Score, 0) {
 			return nil, ErrInvalidCursorValue
 		}
 		return cursor, nil

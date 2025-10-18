@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"fitonex/backend/internal/config"
@@ -76,6 +77,21 @@ func (s *S3Service) PresignGet(ctx context.Context, key string, ttl time.Duratio
 	}
 
 	return url, nil
+}
+
+// SignedGet returns a CDN or presigned URL for playback.
+func (s *S3Service) SignedGet(ctx context.Context, key string, cdnBase string, ttl time.Duration) (string, error) {
+	if cdnBase != "" {
+		base := strings.TrimSuffix(cdnBase, "/")
+		path := strings.TrimPrefix(key, "/")
+		return fmt.Sprintf("%s/%s", base, path), nil
+	}
+	return s.PresignGet(ctx, key, ttl)
+}
+
+func (s *S3Service) Ping(ctx context.Context) error {
+	_, err := s.client.ListBucketsWithContext(ctx, &s3.ListBucketsInput{})
+	return err
 }
 
 // DeleteObject deletes an object from S3

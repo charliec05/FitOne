@@ -1,15 +1,16 @@
 # FitONEX Backend Makefile
 
-.PHONY: help run build test clean migrate-up migrate-down docker-build docker-run seed-dev lint
+.PHONY: help run build test clean migrate-up migrate-down docker-build docker-run seed-dev lint run-jobs
 
 # Default target
 help:
 	@echo "Available commands:"
 	@echo "  run          - Run the development server"
 	@echo "  build        - Build the application"
-    @echo "  test         - Run tests"
-    @echo "  lint         - Run linters"
-    @echo "  seed-dev     - Seed the development database"
+	@echo "  test         - Run tests"
+	@echo "  lint         - Run linters"
+	@echo "  seed-dev     - Seed the development database"
+	@echo "  run-jobs     - Run background jobs"
 	@echo "  clean        - Clean build artifacts"
 	@echo "  migrate-up   - Run database migrations up"
 	@echo "  migrate-down - Rollback database migrations"
@@ -78,6 +79,10 @@ seed:
 seed-dev:
 	@echo "Seeding development database..."
 	go run cmd/admin/seed.go
+
+run-jobs:
+	@echo "Starting background jobs..."
+	go run cmd/jobs/pricing.go
 
 # Stop services
 stop:

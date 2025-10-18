@@ -85,6 +85,12 @@ func (h *Handlers) CreateWorkout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.analytics != nil {
+		h.analytics.EmitEvent(r.Context(), userID, "workout_created", map[string]any{
+			"workout_id": workout.ID,
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(workout)

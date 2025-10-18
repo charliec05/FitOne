@@ -3,6 +3,7 @@ package gyms
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"fitonex/backend/internal/models"
 	"fitonex/backend/internal/pagination"
@@ -72,11 +73,12 @@ SELECT
 	b.distance_m,
 	r.avg_rating,
 	COALESCE(m.machines_count, 0) AS machines_count,
-	p.price_from_cents
+	COALESCE(pc.price_from_cents, p.price_from_cents) AS price_from_cents
 FROM distance_base b
 LEFT JOIN review_stats r ON r.gym_id = b.id
 LEFT JOIN machine_stats m ON m.gym_id = b.id
 LEFT JOIN price_stats p ON p.gym_id = b.id
+LEFT JOIN gym_price_cache pc ON pc.gym_id = b.id
 WHERE b.distance_m <= $3
 `
 
@@ -157,26 +159,31 @@ LIMIT $4
 // GetByID retrieves a gym by ID
 func (s *Store) GetByID(id string) (*models.Gym, error) {
 	query := `
-		SELECT 
-			g.id, g.name, g.lat, g.lng, g.address, g.phone, g.website, g.created_at,
-			COALESCE(AVG(gr.rating), 0) as avg_rating,
-			COUNT(gr.id) as review_count,
-			COUNT(DISTINCT gm.machine_id) as machine_count
-		FROM gyms g
-		LEFT JOIN gym_reviews gr ON g.id = gr.gym_id
-		LEFT JOIN gym_machines gm ON g.id = gm.gym_id
-		WHERE g.id = $1
-		GROUP BY g.id, g.name, g.lat, g.lng, g.address, g.phone, g.website, g.created_at
-	`
+	SELECT 
+		g.id, g.name, g.lat, g.lng, g.address, g.phone, g.website, g.created_at,
+		COALESCE(AVG(gr.rating), 0) as avg_rating,
+		COUNT(gr.id) as review_count,
+		COUNT(DISTINCT gm.machine_id) as machine_count,
+		COALESCE(pc.price_from_cents,
+			(SELECT MIN(price_cents) FROM gym_prices WHERE gym_id = g.id)
+		) AS price_from_cents
+	FROM gyms g
+	LEFT JOIN gym_reviews gr ON g.id = gr.gym_id
+	LEFT JOIN gym_machines gm ON g.id = gm.gym_id
+	LEFT JOIN gym_price_cache pc ON pc.gym_id = g.id
+	WHERE g.id = $1
+	GROUP BY g.id, g.name, g.lat, g.lng, g.address, g.phone, g.website, g.created_at, pc.price_from_cents
+`
 
 	var gym models.Gym
 	var avgRating float64
 	var reviewCount, machineCount int
+	var priceFrom sql.NullInt64
 
 	err := s.db.QueryRow(query, id).Scan(
 		&gym.ID, &gym.Name, &gym.Lat, &gym.Lng, &gym.Address,
 		&gym.Phone, &gym.Website, &gym.CreatedAt,
-		&avgRating, &reviewCount, &machineCount,
+		&avgRating, &reviewCount, &machineCount, &priceFrom,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -185,11 +192,15 @@ func (s *Store) GetByID(id string) (*models.Gym, error) {
 		return nil, fmt.Errorf("failed to get gym: %w", err)
 	}
 
-	if avgRating > 0 {
-		gym.AvgRating = &avgRating
+if avgRating > 0 {
+	gym.AvgRating = &avgRating
+}
+gym.ReviewCount = reviewCount
+gym.MachineCount = machineCount
+	if priceFrom.Valid {
+		value := int(priceFrom.Int64)
+		gym.PriceFromCents = &value
 	}
-	gym.ReviewCount = reviewCount
-	gym.MachineCount = machineCount
 
 	return &gym, nil
 }
@@ -343,4 +354,82 @@ func (s *Store) GetReviews(gymID, cursor string, limit int) ([]models.GymReview,
 	}
 
 	return reviews, nextCursor, nil
+}
+
+func (s *Store) Search(name string, limit int, cursor *pagination.ScoreDescCursor, prefix bool) (pagination.Paginated[models.GymSearchResult], error) {
+	if limit <= 0 {
+		return pagination.Paginated[models.GymSearchResult]{}, pagination.ErrInvalidLimit
+	}
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return pagination.Paginated[models.GymSearchResult]{}, nil
+	}
+
+	var (
+		query string
+		args  []any
+	)
+
+	if prefix {
+		query = `
+SELECT id, name, address, 1.0 AS score
+FROM gyms
+WHERE LOWER(name) LIKE LOWER($1) || '%'
+`
+		args = append(args, name)
+		if cursor != nil {
+			query += ` AND id > $3`
+			args = append(args, limit+1, cursor.ID)
+		} else {
+			args = append(args, limit+1)
+		}
+		query += " ORDER BY score DESC, name ASC, id ASC LIMIT $2"
+	} else {
+		query = `
+WITH ranked AS (
+    SELECT id, name, address, similarity(name, $1) AS score
+    FROM gyms
+)
+SELECT id, name, address, score
+FROM ranked
+WHERE score > 0.1
+`
+		args = append(args, name, limit+1)
+		if cursor != nil {
+			query += ` AND (score < $3 OR (score = $3 AND id > $4))`
+			args = append(args, cursor.Score, cursor.ID)
+		}
+		query += " ORDER BY score DESC, id ASC LIMIT $2"
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return pagination.Paginated[models.GymSearchResult]{}, fmt.Errorf("search gyms: %w", err)
+	}
+	defer rows.Close()
+
+	var results []models.GymSearchResult
+	for rows.Next() {
+		var item models.GymSearchResult
+		if err := rows.Scan(&item.ID, &item.Name, &item.Address, &item.Score); err != nil {
+			return pagination.Paginated[models.GymSearchResult]{}, fmt.Errorf("scan gym search: %w", err)
+		}
+		results = append(results, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return pagination.Paginated[models.GymSearchResult]{}, err
+	}
+
+	page, err := pagination.ScoreDescPage(results, limit, func(item models.GymSearchResult) pagination.ScoreDescCursor {
+		return pagination.ScoreDescCursor{
+			Score: item.Score,
+			ID:    item.ID,
+		}
+	})
+	if err != nil {
+		return pagination.Paginated[models.GymSearchResult]{}, err
+	}
+	return page, nil
 }

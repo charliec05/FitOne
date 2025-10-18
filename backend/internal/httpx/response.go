@@ -1,10 +1,14 @@
 package httpx
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"time"
 )
 
 // ErrorCode represents a stable machine-readable error identifier.
@@ -107,4 +111,25 @@ func WriteAPIError(w http.ResponseWriter, err error) {
 
 	log.Printf("unhandled error: %v", err)
 	WriteError(w, http.StatusInternalServerError, ErrorCodeInternal, "Internal server error")
+}
+
+// WriteJSONWithCache writes JSON and adds cache headers and ETag.
+func WriteJSONWithCache(w http.ResponseWriter, status int, payload any, ttl time.Duration) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("failed to encode JSON response: %v", err)
+		WriteError(w, http.StatusInternalServerError, ErrorCodeInternal, "Internal server error")
+		return
+	}
+
+	if ttl > 0 {
+		w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", int(ttl.Seconds())))
+	}
+	hash := sha1.Sum(body)
+	w.Header().Set("ETag", hex.EncodeToString(hash[:]))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if _, err := w.Write(body); err != nil {
+		log.Printf("failed to write response body: %v", err)
+	}
 }

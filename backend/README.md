@@ -102,6 +102,20 @@ make seed-dev
 
 This command is idempotent and safe to run multiple times.
 
+### Background Jobs
+
+Price caches for gym listings are refreshed by a lightweight job runner:
+
+```bash
+make run-jobs
+```
+
+It recalculates `gym_price_cache` every 15 minutes.
+
+### Moderation & CDN
+
+Set `MODERATION_ENABLED=false` to disable profanity checks during development. To try CDN playback locally, point `CDN_BASE_URL` at a public MinIO endpoint and the API will return `play_url` values using that base.
+
 ## API Endpoints
 
 ### Health Check
@@ -179,6 +193,19 @@ curl http://localhost:8080/v1/checkins/me \
 # Fetch exercises for a day
 curl "http://localhost:8080/v1/exercises?day=2024-05-20&limit=10" \
   -H "Authorization: Bearer $TOKEN"
+
+# Feature flags for a signed-in user
+curl http://localhost:8080/v1/flags \
+  -H "Authorization: Bearer $TOKEN"
+
+# Typeahead search (prefix mode)
+curl "http://localhost:8080/v1/search?query=fit&type=gym&mode=prefix"
+
+# Report abusive content
+curl -X POST http://localhost:8080/v1/reports \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"object_type":"review","object_id":"<review-id>","reason":"abuse"}'
 ```
 
 ## Cursor-based Pagination
@@ -207,6 +234,13 @@ Response includes a `next` field with the cursor for the next page.
 | `S3_BUCKET` | Bucket name for storing videos | `fitonex` |
 | `S3_REGION` | S3 region | `us-east-1` |
 | `MAX_UPLOAD_MB` | Max video upload size in MB | `100` |
+| `MODERATION_ENABLED` | Toggle content moderation rules | `true` |
+| `CDN_BASE_URL` | CDN base URL for video playback (fallback to presigned GET when empty) | *(empty)* |
+| `CACHE_TTL_NEARBY` | TTL for cached nearby gym responses | `60s` |
+| `CACHE_TTL_GYM` | TTL for gym detail cache | `300s` |
+| `ANALYTICS_SINK` | Analytics sink target (`stdout`) | `stdout` |
+| `FEATURE_FLAGS_JSON` | Inline JSON percentage rollout map | `{"video_upload":100,"map_filters":50}` |
+| `ALERT_WEBHOOK_URL` | Webhook target for health alerts | *(empty)* |
 | `ENVIRONMENT` | Environment (development/production) | `development` |
 
 ## Database Schema
@@ -246,6 +280,7 @@ make build         # Build the application
 make test          # Run tests
 make lint          # Run go vet on the codebase
 make seed-dev      # Seed the development database with fixtures
+make run-jobs      # Run background workers (pricing cache)
 make clean         # Clean build artifacts
 make migrate-up    # Run database migrations
 make migrate-down  # Rollback migrations

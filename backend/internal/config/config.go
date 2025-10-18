@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -21,6 +23,15 @@ type Config struct {
 	S3Bucket     string
 	S3Region     string
 	MaxUploadMB  int
+
+	ModerationEnabled bool
+	CDNBaseURL        string
+	CacheTTLNearby    time.Duration
+	CacheTTLGym       time.Duration
+	AnalyticsSink     string
+	FeatureFlags      map[string]float64
+	AlertWebhookURL   string
+	FeatureFlagsRaw   string
 }
 
 // Load reads configuration from environment variables
@@ -41,6 +52,21 @@ func Load() (*Config, error) {
 		S3Bucket:    getEnv("S3_BUCKET", "fitonex"),
 		S3Region:    getEnv("S3_REGION", "us-east-1"),
 		MaxUploadMB: getEnvInt("MAX_UPLOAD_MB", 100),
+
+		ModerationEnabled: getEnvBool("MODERATION_ENABLED", true),
+		CDNBaseURL:        getEnv("CDN_BASE_URL", ""),
+		CacheTTLNearby:    getEnvDuration("CACHE_TTL_NEARBY", 60*time.Second),
+		CacheTTLGym:       getEnvDuration("CACHE_TTL_GYM", 5*time.Minute),
+		AnalyticsSink:     getEnv("ANALYTICS_SINK", "stdout"),
+		AlertWebhookURL:   getEnv("ALERT_WEBHOOK_URL", ""),
+		FeatureFlagsRaw:   getEnv("FEATURE_FLAGS_JSON", `{"video_upload":100,"map_filters":50}`),
+	}
+
+	flags := make(map[string]float64)
+	if err := json.Unmarshal([]byte(cfg.FeatureFlagsRaw), &flags); err == nil {
+		cfg.FeatureFlags = flags
+	} else {
+		cfg.FeatureFlags = map[string]float64{}
 	}
 
 	return cfg, nil
@@ -59,6 +85,27 @@ func getEnvInt(key string, fallback int) int {
 	if value := os.Getenv(key); value != "" {
 		if intValue, err := strconv.Atoi(value); err == nil {
 			return intValue
+		}
+	}
+	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	if value := os.Getenv(key); value != "" {
+		switch value {
+		case "1", "true", "TRUE", "True":
+			return true
+		case "0", "false", "FALSE", "False":
+			return false
+		}
+	}
+	return fallback
+}
+
+func getEnvDuration(key string, fallback time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		if d, err := time.ParseDuration(value); err == nil {
+			return d
 		}
 	}
 	return fallback

@@ -4,7 +4,10 @@ import (
 	"context"
 	"time"
 
+	"fitonex/backend/internal/analytics"
+	"fitonex/backend/internal/cache"
 	"fitonex/backend/internal/config"
+	"fitonex/backend/internal/flags"
 	"fitonex/backend/internal/models"
 	"fitonex/backend/internal/pagination"
 	"fitonex/backend/internal/ratelimit"
@@ -29,6 +32,8 @@ type videoService interface {
 
 type objectStorage interface {
 	PresignPut(ctx context.Context, key, contentType string, sizeBytes int64, ttl time.Duration) (string, error)
+	SignedGet(ctx context.Context, key string, cdnBase string, ttl time.Duration) (string, error)
+	Ping(ctx context.Context) error
 }
 
 // Handlers contains all HTTP handlers
@@ -40,6 +45,12 @@ type Handlers struct {
 	videoService   videoService
 	storage     objectStorage
 	uploadLimiter ratelimit.Limiter
+	reportLimiter ratelimit.Limiter
+	cache       *cache.Cache
+	analytics   *analytics.Emitter
+	flags       *flags.Manager
+	moderationEnabled bool
+	cdnBaseURL string
 }
 
 // New creates a new handlers instance
@@ -83,6 +94,30 @@ func (h *Handlers) SetObjectStorage(storage objectStorage) {
 // SetUploadLimiter configures the upload rate limiter.
 func (h *Handlers) SetUploadLimiter(limiter ratelimit.Limiter) {
 	h.uploadLimiter = limiter
+}
+
+func (h *Handlers) SetReportLimiter(limiter ratelimit.Limiter) {
+	h.reportLimiter = limiter
+}
+
+func (h *Handlers) SetCache(cache *cache.Cache) {
+	h.cache = cache
+}
+
+func (h *Handlers) SetAnalytics(emitter *analytics.Emitter) {
+	h.analytics = emitter
+}
+
+func (h *Handlers) SetFlags(manager *flags.Manager) {
+	h.flags = manager
+}
+
+func (h *Handlers) SetModerationEnabled(enabled bool) {
+	h.moderationEnabled = enabled
+}
+
+func (h *Handlers) SetCDNBaseURL(base string) {
+	h.cdnBaseURL = base
 }
 
 // SetMachineService overrides the machine service implementation (useful for tests).

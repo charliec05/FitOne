@@ -19,6 +19,7 @@ type InstructionVideo struct {
 	// Computed fields
 	LikeCount int `json:"like_count"`
 	IsLiked   bool `json:"is_liked"`
+	PlayURL   string `json:"play_url,omitempty"`
 	
 	// User info for display
 	UploaderName string `json:"uploader_name,omitempty"`

@@ -20,6 +20,7 @@ type Gym struct {
 	AvgRating   *float64 `json:"avg_rating,omitempty"`
 	ReviewCount int      `json:"review_count"`
 	MachineCount int    `json:"machine_count"`
+	PriceFromCents *int  `json:"price_from_cents,omitempty"`
 }
 
 // NearbyGym represents the minimal payload for the nearby gyms feed.
@@ -33,6 +34,13 @@ type NearbyGym struct {
 	AvgRating       *float64 `json:"avg_rating,omitempty"`
 	MachinesCount   int      `json:"machines_count"`
 	PriceFromCents  *int     `json:"price_from_cents,omitempty"`
+}
+
+type GymSearchResult struct {
+	ID      string  `json:"id"`
+	Name    string  `json:"name"`
+	Address string  `json:"address"`
+	Score   float64 `json:"score"`
 }
 
 // GymPrice represents a gym membership price
@@ -62,6 +70,13 @@ type Machine struct {
 	Name     string    `json:"name" db:"name"`
 	BodyPart string    `json:"body_part" db:"body_part"`
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
+}
+
+type MachineSearchResult struct {
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	BodyPart string  `json:"body_part"`
+	Score    float64 `json:"score"`
 }
 
 // GymMachine represents the relationship between gyms and machines
