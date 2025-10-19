@@ -1,0 +1,33 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    paths:
+      - 'mobile-android/**'
+      - '.github/workflows/android-ci.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Grant execute permission
+        run: chmod +x ./mobile-android/gradlew
+      - name: Android Lint & Tests
+        working-directory: mobile-android
+        run: ./gradlew lintDebug testDebugUnitTest
+      - name: Assemble Dev Release
+        working-directory: mobile-android
+        run: ./gradlew assembleDevRelease
+      - name: Upload APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: dev-release-apk
+          path: mobile-android/app/build/outputs/apk/dev/release/*.apk

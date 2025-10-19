@@ -73,6 +73,8 @@ func Up(db *sql.DB) error {
 			video_key TEXT NOT NULL,
 			thumb_key TEXT,
 			duration_sec INTEGER,
+			premium_only BOOLEAN NOT NULL DEFAULT FALSE,
+			likes_count INTEGER NOT NULL DEFAULT 0,
 			created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE TABLE IF NOT EXISTS video_likes (
@@ -130,7 +132,29 @@ func Up(db *sql.DB) error {
 		"CREATE INDEX IF NOT EXISTS idx_gyms_name_trgm ON gyms USING gin (name gin_trgm_ops)",
 		"CREATE INDEX IF NOT EXISTS idx_machines_name_trgm ON machines USING gin (name gin_trgm_ops)",
 		"CREATE INDEX IF NOT EXISTS idx_machines_body_part_trgm ON machines USING gin (body_part gin_trgm_ops)",
-	}
+		"ALTER TABLE users ADD COLUMN IF NOT EXISTS premium_until TIMESTAMP WITH TIME ZONE",
+		"ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_provider TEXT",
+		"ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_id TEXT",
+		"ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oauth ON users(oauth_provider, oauth_id)",
+		"ALTER TABLE instruction_videos ADD COLUMN IF NOT EXISTS likes_count INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE instruction_videos ADD COLUMN IF NOT EXISTS premium_only BOOLEAN NOT NULL DEFAULT FALSE",
+		`CREATE TABLE IF NOT EXISTS video_comments (
+			id UUID PRIMARY KEY,
+			video_id UUID NOT NULL REFERENCES instruction_videos(id) ON DELETE CASCADE,
+			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			comment TEXT NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+		)`,
+		"CREATE INDEX IF NOT EXISTS idx_video_comments_video_created ON video_comments(video_id, created_at DESC)",
+		`CREATE TABLE IF NOT EXISTS password_resets (
+			token TEXT PRIMARY KEY,
+			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+		)`,
+		"CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id)",
+}
 
 	for _, stmt := range statements {
 		if _, err := db.Exec(stmt); err != nil {

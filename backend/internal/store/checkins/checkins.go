@@ -137,3 +137,56 @@ func buildCheckinStats(days []time.Time) models.CheckinStats {
 
     return stats
 }
+
+func (s *Store) ExportByUser(userID string) ([]models.Checkin, error) {
+	rows, err := s.db.Query(`SELECT id, user_id, day, created_at FROM checkins WHERE user_id = $1 ORDER BY day DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []models.Checkin
+	for rows.Next() {
+		var item models.Checkin
+		if err := rows.Scan(&item.ID, &item.UserID, &item.Day, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) DeleteByUser(userID string) error {
+	_, err := s.db.Exec(`DELETE FROM checkins WHERE user_id = $1`, userID)
+	return err
+}
+
+func (s *Store) TopStreaks(period time.Duration, limit int) ([]models.LeaderboardEntry, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	since := time.Now().UTC().Add(-period)
+	rows, err := s.db.Query(`
+		SELECT c.user_id, u.name, COUNT(*) AS total
+		FROM checkins c
+		JOIN users u ON c.user_id = u.id
+		WHERE c.day >= $1 AND (u.deleted_at IS NULL)
+		GROUP BY c.user_id, u.name
+		ORDER BY total DESC
+		LIMIT $2
+	`, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []models.LeaderboardEntry
+	for rows.Next() {
+		var entry models.LeaderboardEntry
+		if err := rows.Scan(&entry.UserID, &entry.UserName, &entry.StreakDays); err != nil {
+			return nil, err
+		}
+		results = append(results, entry)
+	}
+	return results, rows.Err()
+}

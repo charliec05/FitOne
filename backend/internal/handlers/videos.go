@@ -58,6 +58,7 @@ type FinalizeVideoRequest struct {
 	VideoKey    string `json:"video_key"`
 	ThumbKey    string `json:"thumb_key,omitempty"`
 	DurationSec int    `json:"duration_sec"`
+	PremiumOnly bool   `json:"premium_only"`
 }
 
 // GetUploadURL returns pre-signed URLs for uploading video and thumbnail content.
@@ -191,7 +192,13 @@ func (h *Handlers) FinalizeVideo(w http.ResponseWriter, r *http.Request) {
 		duration = &req.DurationSec
 	}
 
-    video, err := videoSvc.Create(req.MachineID, userID, title, description, req.VideoKey, thumbKey, duration)
+    premiumOnly := req.PremiumOnly
+    if premiumOnly && !h.userIsPremium(userID) {
+        httpx.WriteError(w, http.StatusForbidden, httpx.ErrorCodeForbidden, "premium required")
+        return
+    }
+
+    video, err := videoSvc.Create(req.MachineID, userID, title, description, req.VideoKey, thumbKey, duration, premiumOnly)
     if err != nil {
         httpx.WriteAPIError(w, httpx.WrapError(err, http.StatusInternalServerError, httpx.ErrorCodeInternal, "failed to create video"))
         return
@@ -257,11 +264,11 @@ func (h *Handlers) GetVideos(w http.ResponseWriter, r *http.Request) {
 	}
 
     page, err := videoSvc.ListByMachine(machineID, limit, cursorPtr)
-	if err != nil {
-		if errors.Is(err, pagination.ErrInvalidLimit) {
-			httpx.WriteError(w, http.StatusBadRequest, httpx.ErrorCodeBadRequest, "limit must be greater than zero")
-			return
-		}
+    if err != nil {
+        if errors.Is(err, pagination.ErrInvalidLimit) {
+            httpx.WriteError(w, http.StatusBadRequest, httpx.ErrorCodeBadRequest, "limit must be greater than zero")
+            return
+        }
 		var apiErr *httpx.APIError
 		if errors.As(err, &apiErr) {
 			httpx.WriteAPIError(w, apiErr)
@@ -273,19 +280,32 @@ func (h *Handlers) GetVideos(w http.ResponseWriter, r *http.Request) {
 
     storageSvc := h.storageService()
     if storageSvc == nil {
-        service, err := storage.NewS3Service(h.config)
-        if err != nil {
-            httpx.WriteAPIError(w, httpx.WrapError(err, http.StatusInternalServerError, httpx.ErrorCodeInternal, "storage unavailable"))
-            return
+        if service, err := storage.NewS3Service(h.config); err == nil {
+            h.SetObjectStorage(service)
+            storageSvc = service
         }
-        h.SetObjectStorage(service)
-        storageSvc = service
+    }
+
+    user, _ := h.optionalUser(r)
+    userPremium := false
+    if user != nil {
+        userPremium = h.userIsPremium(user.ID)
     }
 
     for i := range page.Items {
-        playURL, err := storageSvc.SignedGet(r.Context(), page.Items[i].VideoKey, h.cdnBaseURL, 5*time.Minute)
-        if err == nil {
-            page.Items[i].PlayURL = playURL
+        if storageSvc != nil {
+            if playURL, err := storageSvc.SignedGet(r.Context(), page.Items[i].VideoKey, h.cdnBaseURL, 5*time.Minute); err == nil && (!page.Items[i].PremiumOnly || userPremium) {
+                page.Items[i].PlayURL = playURL
+            }
+        }
+        if page.Items[i].PremiumOnly && !userPremium {
+            page.Items[i].PlayURL = ""
+        }
+        if user != nil && h.store != nil && h.store.Videos != nil {
+            liked, err := h.store.Videos.IsLiked(page.Items[i].ID, user.ID)
+            if err == nil {
+                page.Items[i].IsLiked = liked
+            }
         }
     }
 
@@ -312,10 +332,34 @@ func (h *Handlers) GetVideo(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    if storageSvc := h.storageService(); storageSvc != nil {
+    storageSvc := h.storageService()
+    if storageSvc == nil {
+        if service, err := storage.NewS3Service(h.config); err == nil {
+            h.SetObjectStorage(service)
+            storageSvc = service
+        }
+    }
+    var premium bool
+    if user, _ := h.optionalUser(r); user != nil {
+        premium = h.userIsPremium(user.ID)
+    if storageSvc != nil && (!video.PremiumOnly || premium) {
         if playURL, err := storageSvc.SignedGet(r.Context(), video.VideoKey, h.cdnBaseURL, 5*time.Minute); err == nil {
             video.PlayURL = playURL
         }
+    }
+        if h.store != nil && h.store.Videos != nil {
+            liked, err := h.store.Videos.IsLiked(videoID, user.ID)
+            if err == nil {
+                video.IsLiked = liked
+            }
+        }
+    } else if storageSvc != nil && !video.PremiumOnly {
+        if playURL, err := storageSvc.SignedGet(r.Context(), video.VideoKey, h.cdnBaseURL, 5*time.Minute); err == nil {
+            video.PlayURL = playURL
+        }
+    }
+    if video.PremiumOnly && !premium {
+        video.PlayURL = ""
     }
 
     httpx.WriteJSON(w, http.StatusOK, video)

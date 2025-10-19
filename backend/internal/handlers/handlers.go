@@ -9,6 +9,9 @@ import (
 	"fitonex/backend/internal/config"
 	"fitonex/backend/internal/flags"
 	"fitonex/backend/internal/models"
+	"fitonex/backend/internal/notifications"
+	"fitonex/backend/internal/oauth"
+	"fitonex/backend/internal/payments"
 	"fitonex/backend/internal/pagination"
 	"fitonex/backend/internal/ratelimit"
 	"fitonex/backend/internal/store"
@@ -23,11 +26,14 @@ type machineService interface {
 }
 
 type videoService interface {
-	Create(machineID, uploaderID, title string, description *string, videoKey string, thumbKey *string, durationSec *int) (*models.InstructionVideo, error)
+	Create(machineID, uploaderID, title string, description *string, videoKey string, thumbKey *string, durationSec *int, premiumOnly bool) (*models.InstructionVideo, error)
 	ListByMachine(machineID string, limit int, cursor *pagination.TimeDescCursor) (pagination.Paginated[models.InstructionVideo], error)
 	GetByID(id string) (*models.InstructionVideo, error)
 	LikeVideo(videoID, userID string) error
 	UnlikeVideo(videoID, userID string) error
+	ExportByUser(userID string) ([]models.InstructionVideo, error)
+	AnonymizeByUser(userID string) error
+	DeleteLikesByUser(userID string) error
 }
 
 type objectStorage interface {
@@ -51,6 +57,9 @@ type Handlers struct {
 	flags       *flags.Manager
 	moderationEnabled bool
 	cdnBaseURL string
+	payments   payments.Provider
+	emails     notifications.EmailSender
+	oauth      *oauth.GoogleVerifier
 }
 
 // New creates a new handlers instance
@@ -118,6 +127,18 @@ func (h *Handlers) SetModerationEnabled(enabled bool) {
 
 func (h *Handlers) SetCDNBaseURL(base string) {
 	h.cdnBaseURL = base
+}
+
+func (h *Handlers) SetPaymentProvider(provider payments.Provider) {
+	h.payments = provider
+}
+
+func (h *Handlers) SetEmailSender(sender notifications.EmailSender) {
+	h.emails = sender
+}
+
+func (h *Handlers) SetOAuthVerifier(verifier *oauth.GoogleVerifier) {
+	h.oauth = verifier
 }
 
 // SetMachineService overrides the machine service implementation (useful for tests).

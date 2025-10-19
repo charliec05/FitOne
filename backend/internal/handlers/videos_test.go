@@ -42,6 +42,17 @@ func (f *fakeStorage) PresignPut(_ context.Context, key, contentType string, siz
 	return f.thumbURL, nil
 }
 
+func (f *fakeStorage) SignedGet(_ context.Context, key string, _ string, _ time.Duration) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.videoURL, nil
+}
+
+func (f *fakeStorage) Ping(ctx context.Context) error {
+	return nil
+}
+
 type fakeLimiter struct {
 	decision ratelimit.Decision
 	err      error
@@ -78,6 +89,7 @@ type fakeVideoService struct {
 		VideoKey    string
 		ThumbKey    *string
 		DurationSec *int
+		PremiumOnly bool
 	}
 	createErr error
 
@@ -106,7 +118,7 @@ type fakeVideoService struct {
 	unlikeErr error
 }
 
-func (f *fakeVideoService) Create(machineID, uploaderID, title string, description *string, videoKey string, thumbKey *string, durationSec *int) (*models.InstructionVideo, error) {
+func (f *fakeVideoService) Create(machineID, uploaderID, title string, description *string, videoKey string, thumbKey *string, durationSec *int, premiumOnly bool) (*models.InstructionVideo, error) {
 	f.createInput = struct {
 		MachineID   string
 		UploaderID  string
@@ -115,11 +127,12 @@ func (f *fakeVideoService) Create(machineID, uploaderID, title string, descripti
 		VideoKey    string
 		ThumbKey    *string
 		DurationSec *int
-	}{machineID, uploaderID, title, description, videoKey, thumbKey, durationSec}
+		PremiumOnly bool
+	}{machineID, uploaderID, title, description, videoKey, thumbKey, durationSec, premiumOnly}
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
-	return &models.InstructionVideo{ID: "video-1", MachineID: machineID, Title: title, VideoKey: videoKey}, nil
+	return &models.InstructionVideo{ID: "video-1", MachineID: machineID, Title: title, VideoKey: videoKey, PremiumOnly: premiumOnly}, nil
 }
 
 func (f *fakeVideoService) ListByMachine(machineID string, limit int, cursor *pagination.TimeDescCursor) (pagination.Paginated[models.InstructionVideo], error) {
@@ -159,6 +172,18 @@ func (f *fakeVideoService) UnlikeVideo(videoID, userID string) error {
 		UserID  string
 	}{videoID, userID}
 	return f.unlikeErr
+}
+
+func (f *fakeVideoService) ExportByUser(userID string) ([]models.InstructionVideo, error) {
+	return nil, nil
+}
+
+func (f *fakeVideoService) AnonymizeByUser(userID string) error {
+	return nil
+}
+
+func (f *fakeVideoService) DeleteLikesByUser(userID string) error {
+	return nil
 }
 
 func TestGetUploadURLSuccess(t *testing.T) {
@@ -273,6 +298,9 @@ func TestFinalizeVideoSuccess(t *testing.T) {
 	if videoSvc.createInput.DurationSec == nil || *videoSvc.createInput.DurationSec != 120 {
 		t.Fatalf("unexpected duration %v", videoSvc.createInput.DurationSec)
 	}
+	if videoSvc.createInput.PremiumOnly {
+		t.Fatalf("expected premium flag false")
+	}
 }
 
 func TestFinalizeVideoValidation(t *testing.T) {
@@ -301,8 +329,8 @@ func TestGetVideosSuccess(t *testing.T) {
 	videoSvc := &fakeVideoService{
 		listPage: pagination.Paginated[models.InstructionVideo]{
 			Items: []models.InstructionVideo{
-				{ID: "v1", CreatedAt: time.Now()},
-				{ID: "v2", CreatedAt: time.Now().Add(-time.Minute)},
+				{ID: "v1", CreatedAt: time.Now(), PremiumOnly: false},
+				{ID: "v2", CreatedAt: time.Now().Add(-time.Minute), PremiumOnly: true},
 			},
 			HasMore: true,
 			NextCursor: "cursor123",
@@ -313,6 +341,7 @@ func TestGetVideosSuccess(t *testing.T) {
 		config: &config.Config{},
 	}
 	h.SetVideoService(videoSvc)
+	h.SetObjectStorage(&fakeStorage{videoURL: "https://cdn/video", thumbURL: "https://cdn/thumb"})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/videos?machine_id=machine-1&limit=30", nil)
 	res := httptest.NewRecorder()
@@ -334,6 +363,12 @@ func TestGetVideosSuccess(t *testing.T) {
 
 	if !payload.HasMore || payload.NextCursor != "cursor123" {
 		t.Fatalf("unexpected pagination payload: %+v", payload)
+	}
+	if payload.Items[0].PlayURL == "" {
+		t.Fatalf("expected non-premium video to have play url")
+	}
+	if payload.Items[1].PlayURL != "" {
+		t.Fatalf("expected premium video to hide play url")
 	}
 }
 

@@ -1,0 +1,40 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-ci.yml'
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+      - name: Backend Unit Tests
+        run: |
+          cd backend
+          go test ./...
+      - name: Backend Build
+        run: |
+          cd backend
+          go build ./...
+  docker:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build Docker image
+        run: |
+          cd backend
+          docker build -t fitonex/api:${GITHUB_SHA} .
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: backend-image
+          path: backend

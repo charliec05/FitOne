@@ -13,5 +13,6 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/alicebob/miniredis/v2 v2.34.0
 	github.com/redis/go-redis/v9 v9.2.1
+	github.com/stripe/stripe-go/v76 v76.5.0
 	golang.org/x/crypto v0.14.0
 )

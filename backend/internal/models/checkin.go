@@ -19,6 +19,12 @@ type CheckinStats struct {
 	LastCheckinDay     *time.Time `json:"last_checkin_day,omitempty"`
 }
 
+type LeaderboardEntry struct {
+	UserID     string `json:"user_id"`
+	UserName   string `json:"user_name"`
+	StreakDays int    `json:"streak_days"`
+}
+
 // Exercise represents an exercise session
 type Exercise struct {
 	ID        string    `json:"id" db:"id"`

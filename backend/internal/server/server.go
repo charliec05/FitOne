@@ -13,7 +13,10 @@ import (
 	"fitonex/backend/internal/config"
 	"fitonex/backend/internal/flags"
 	"fitonex/backend/internal/handlers"
+	"fitonex/backend/internal/notifications"
+	"fitonex/backend/internal/oauth"
 	"fitonex/backend/internal/observability"
+	"fitonex/backend/internal/payments"
 	"fitonex/backend/internal/ratelimit"
 	"fitonex/backend/internal/redisclient"
 	"fitonex/backend/internal/storage"
@@ -111,6 +114,11 @@ func (s *Server) Start() error {
 	s.handlers.SetFlags(s.flags)
 	s.handlers.SetModerationEnabled(s.config.ModerationEnabled)
 	s.handlers.SetCDNBaseURL(s.config.CDNBaseURL)
+	s.handlers.SetEmailSender(notifications.NewLoggerEmailSender(s.config.EmailSender, s.logger))
+	if provider := payments.NewStripeProvider(s.config); provider != nil {
+		s.handlers.SetPaymentProvider(provider)
+	}
+	s.handlers.SetOAuthVerifier(oauth.NewGoogleVerifier(s.config.GoogleClientID))
 
 	s.httpServer = &http.Server{
 		Addr:    ":" + s.config.Port,
@@ -172,6 +180,7 @@ func setupRoutes(r *chi.Mux, h *handlers.Handlers) {
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/flags", h.GetFeatureFlags)
 		r.Get("/search", h.Search)
+		r.Get("/streaks/top", h.GetTopStreaks)
 
 		r.Get("/gyms/nearby", h.GetNearbyGyms)
 		r.Get("/gyms/{id}", h.GetGym)
@@ -188,8 +197,13 @@ func setupRoutes(r *chi.Mux, h *handlers.Handlers) {
 
 		r.Post("/auth/register", h.Register)
 		r.Post("/auth/login", h.Login)
+		r.Post("/auth/forgot-password", h.ForgotPassword)
+		r.Post("/auth/reset-password", h.ResetPassword)
+		r.Post("/auth/oauth/google", h.GoogleOAuth)
 
 		r.Post("/reports", h.CreateReport)
+		r.Post("/payments/webhook", h.HandlePaymentsWebhook)
+		r.Get("/videos/{id}/comments", h.ListVideoComments)
 
 		r.Route("/", func(r chi.Router) {
 			r.Use(h.AuthMiddleware)
@@ -204,11 +218,13 @@ func setupRoutes(r *chi.Mux, h *handlers.Handlers) {
 			r.Delete("/workouts/{id}", h.DeleteWorkout)
 
 			r.Post("/gyms/{id}/reviews", h.CreateGymReview)
+			r.Post("/payments/session", h.CreateCheckoutSession)
 
 			r.Post("/videos/upload-url", h.GetUploadURL)
 			r.Post("/videos/finalize", h.FinalizeVideo)
 			r.Post("/videos/{id}/like", h.LikeVideo)
 			r.Delete("/videos/{id}/like", h.UnlikeVideo)
+			r.Post("/videos/{id}/comments", h.CreateVideoComment)
 
 			r.Post("/checkins/today", h.CheckinToday)
 			r.Get("/checkins/me", h.GetCheckinStats)
@@ -216,6 +232,9 @@ func setupRoutes(r *chi.Mux, h *handlers.Handlers) {
 			r.Post("/exercises", h.CreateExercise)
 			r.Get("/exercises", h.GetExercises)
 			r.Get("/exercises/{id}", h.GetExercise)
+
+			r.Post("/account/export", h.ExportAccount)
+			r.Post("/account/delete", h.DeleteAccount)
 		})
 	})
 

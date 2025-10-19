@@ -116,6 +116,15 @@ It recalculates `gym_price_cache` every 15 minutes.
 
 Set `MODERATION_ENABLED=false` to disable profanity checks during development. To try CDN playback locally, point `CDN_BASE_URL` at a public MinIO endpoint and the API will return `play_url` values using that base.
 
+### Stripe & Webhooks
+
+1. Install the Stripe CLI and login: `stripe login`
+2. Start a local webhook forwarder: `stripe listen --forward-to localhost:8080/v1/payments/webhook`
+3. Export the signing secret from the CLI to `STRIPE_WEBHOOK_SECRET`
+4. Launch the API (`make run`) and hit `POST /v1/payments/session` to obtain a checkout URL
+
+Upon webhook delivery the backend will extend `premium_until` for the associated user.
+
 ## API Endpoints
 
 ### Health Check
@@ -143,14 +152,31 @@ Set `MODERATION_ENABLED=false` to disable profanity checks during development. T
 - `POST /v1/videos/upload-url` - Request presigned URLs for uploading video + thumbnail (requires auth)
 - `POST /v1/videos/finalize` - Persist video metadata after upload (requires auth)
 - `GET /v1/videos` - List machine instruction videos (cursor pagination)
+- `GET /v1/videos/{id}/comments` - Public comment feed for a video
+- `POST /v1/videos/{id}/comments` - Add a comment (requires auth)
+- `POST /v1/videos/{id}/like` / `DELETE /v1/videos/{id}/like` - Social engagement (requires auth)
 
 ### Check-ins & Streaks
 - `POST /v1/checkins/today` - Idempotent daily check-in (requires auth)
 - `GET /v1/checkins/me` - Current and longest streak stats (requires auth)
+- `GET /v1/streaks/top` - Leaderboard for streak activity
 
 ### Exercises
 - `POST /v1/exercises` - Log an exercise with sets for a given day (requires auth)
 - `GET /v1/exercises` - Day view with cursor pagination (requires auth)
+
+### Payments & Premium
+- `POST /v1/payments/session` - Create a Stripe Checkout session (requires auth)
+- `POST /v1/payments/webhook` - Stripe webhook callback (internal)
+
+### Authentication Extensions
+- `POST /v1/auth/oauth/google` - Exchange Google ID token for FitONEX session
+- `POST /v1/auth/forgot-password` - Request reset email (idempotent)
+- `POST /v1/auth/reset-password` - Complete password reset with token
+
+### Account & Compliance
+- `POST /v1/account/export` - Download workouts, check-ins, videos, and reviews
+- `POST /v1/account/delete` - Soft delete account and anonymize authored content
 
 ## Sample cURL
 
@@ -206,6 +232,10 @@ curl -X POST http://localhost:8080/v1/reports \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"object_type":"review","object_id":"<review-id>","reason":"abuse"}'
+
+# Create checkout session
+curl -X POST http://localhost:8080/v1/payments/session \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ## Cursor-based Pagination

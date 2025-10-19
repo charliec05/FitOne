@@ -168,3 +168,26 @@ func (s *Store) Delete(id, userID string) error {
 
 	return nil
 }
+
+func (s *Store) ExportByUser(userID string) ([]models.Workout, error) {
+	rows, err := s.db.Query(`SELECT id, user_id, name, description, duration, type, created_at, updated_at FROM workouts WHERE user_id = $1 ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []models.Workout
+	for rows.Next() {
+		var workout models.Workout
+		if err := rows.Scan(&workout.ID, &workout.UserID, &workout.Name, &workout.Description, &workout.Duration, &workout.Type, &workout.CreatedAt, &workout.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, workout)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) DeleteByUser(userID string) error {
+	_, err := s.db.Exec(`DELETE FROM workouts WHERE user_id = $1`, userID)
+	return err
+}

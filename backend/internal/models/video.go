@@ -15,10 +15,11 @@ type InstructionVideo struct {
 	ThumbKey    *string   `json:"thumb_key,omitempty" db:"thumb_key"`
 	DurationSec *int      `json:"duration_sec,omitempty" db:"duration_sec"`
 	CreatedAt   time.Time `json:"created_at" db:"created_at"`
-	
+	PremiumOnly bool `json:"premium_only" db:"premium_only"`
+
 	// Computed fields
-	LikeCount int `json:"like_count"`
-	IsLiked   bool `json:"is_liked"`
+	LikeCount int    `json:"like_count"`
+	IsLiked   bool   `json:"is_liked"`
 	PlayURL   string `json:"play_url,omitempty"`
 	
 	// User info for display
@@ -31,4 +32,12 @@ type VideoLike struct {
 	VideoID   string    `json:"video_id" db:"video_id"`
 	UserID    string    `json:"user_id" db:"user_id"`
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
+}
+
+type VideoComment struct {
+	ID        string    `json:"id"`
+	VideoID   string    `json:"video_id"`
+	UserID    string    `json:"user_id"`
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"created_at"`
 }

@@ -32,12 +32,25 @@ type Config struct {
 	FeatureFlags      map[string]float64
 	AlertWebhookURL   string
 	FeatureFlagsRaw   string
+
+	StripeSecretKey     string
+	StripeWebhookSecret string
+	StripeSuccessURL    string
+	StripeCancelURL     string
+    StripePriceID      string
+	GoogleClientID      string
+	GoogleClientSecret  string
+	PasswordResetSecret string
+	EmailSender         string
+	EnvironmentName     string
 }
 
 // Load reads configuration from environment variables
 func Load() (*Config, error) {
 	// Load .env file if it exists
 	_ = godotenv.Load()
+
+	envName := getEnv("ENV_NAME", "")
 
 	cfg := &Config{
 		Port:        getEnv("PORT", "8080"),
@@ -60,6 +73,21 @@ func Load() (*Config, error) {
 		AnalyticsSink:     getEnv("ANALYTICS_SINK", "stdout"),
 		AlertWebhookURL:   getEnv("ALERT_WEBHOOK_URL", ""),
 		FeatureFlagsRaw:   getEnv("FEATURE_FLAGS_JSON", `{"video_upload":100,"map_filters":50}`),
+		StripeSecretKey:   getEnv("STRIPE_SECRET_KEY", ""),
+		StripeWebhookSecret: getEnv("STRIPE_WEBHOOK_SECRET", ""),
+		StripeSuccessURL:    getEnv("STRIPE_SUCCESS_URL", "https://localhost/success"),
+		StripeCancelURL:     getEnv("STRIPE_CANCEL_URL", "https://localhost/cancel"),
+		StripePriceID:       getEnv("STRIPE_PRICE_ID", ""),
+		GoogleClientID:      getEnv("GOOGLE_OAUTH_CLIENT_ID", ""),
+		GoogleClientSecret:  getEnv("GOOGLE_OAUTH_CLIENT_SECRET", ""),
+		PasswordResetSecret: getEnv("PASSWORD_RESET_SECRET", "change-me"),
+		EmailSender:         getEnv("EMAIL_SENDER_ADDRESS", "no-reply@fitonex.local"),
+	}
+
+	if envName != "" {
+		cfg.EnvironmentName = envName
+	} else {
+		cfg.EnvironmentName = cfg.Environment
 	}
 
 	flags := make(map[string]float64)

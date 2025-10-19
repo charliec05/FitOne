@@ -10,6 +10,7 @@ import (
 	"fitonex/backend/internal/store/gyms"
 	"fitonex/backend/internal/store/machines"
 	"fitonex/backend/internal/store/moderation"
+	"fitonex/backend/internal/store/social"
 	"fitonex/backend/internal/store/migrations"
 	"fitonex/backend/internal/store/users"
 	"fitonex/backend/internal/store/videos"
@@ -26,10 +27,11 @@ type Store struct {
 	Workouts   *workouts.Store
 	Gyms       *gyms.Store
 	Machines   *machines.Store
-	Videos     *videos.Store
-	Checkins   *checkins.Store
-	Exercises  *exercises.Store
-	Moderation *moderation.Store
+    Videos     *videos.Store
+    Checkins   *checkins.Store
+    Exercises  *exercises.Store
+    Moderation *moderation.Store
+    Comments   *social.Store
 }
 
 // New creates a new store instance
@@ -59,9 +61,10 @@ func (s *Store) Connect() error {
 	s.Gyms = gyms.New(s.db)
 	s.Machines = machines.New(s.db)
 	s.Videos = videos.New(s.db)
-	s.Checkins = checkins.New(s.db)
-	s.Exercises = exercises.New(s.db)
-	s.Moderation = moderation.New(s.db)
+    s.Checkins = checkins.New(s.db)
+    s.Exercises = exercises.New(s.db)
+    s.Moderation = moderation.New(s.db)
+    s.Comments = social.New(s.db)
 
 	return nil
 }

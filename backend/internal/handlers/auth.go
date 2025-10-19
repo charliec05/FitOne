@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"fitonex/backend/internal/auth"
 	"fitonex/backend/internal/models"
@@ -92,6 +93,10 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
+	if user.DeletedAt != nil {
+		http.Error(w, "Account inactive", http.StatusUnauthorized)
+		return
+	}
 
 	// Generate JWT token
 	token, err := auth.GenerateToken(user.ID, h.config.JWTSecret)
@@ -123,15 +128,23 @@ func (h *Handlers) AuthMiddleware(next http.Handler) http.Handler {
 			token = token[7:]
 		}
 
-		// Validate token
-		userID, err := auth.ValidateToken(token, h.config.JWTSecret)
-		if err != nil {
-			http.Error(w, "Invalid token", http.StatusUnauthorized)
-			return
-		}
+	// Validate token
+	userID, err := auth.ValidateToken(token, h.config.JWTSecret)
+	if err != nil {
+		http.Error(w, "Invalid token", http.StatusUnauthorized)
+		return
+	}
 
-		// Add user ID to request context
-		ctx := context.WithValue(r.Context(), "userID", userID)
-		next.ServeHTTP(w, r.WithContext(ctx))
+	user, err := h.store.Users.GetByID(userID)
+	if err != nil || user.DeletedAt != nil {
+		http.Error(w, "User not active", http.StatusUnauthorized)
+		return
+	}
+
+	ctx := context.WithValue(r.Context(), ctxUserID, userID)
+	ctx = context.WithValue(ctx, ctxUser, user)
+	ctx = context.WithValue(ctx, ctxTokenGeneratedAt, time.Now())
+	next.ServeHTTP(w, r.WithContext(ctx))
+
 	})
 }

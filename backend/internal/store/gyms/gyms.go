@@ -356,6 +356,31 @@ func (s *Store) GetReviews(gymID, cursor string, limit int) ([]models.GymReview,
 	return reviews, nextCursor, nil
 }
 
+func (s *Store) ExportReviewsByUser(userID string) ([]models.GymReview, error) {
+	rows, err := s.db.Query(`
+		SELECT id, gym_id, user_id, rating, comment, created_at
+		FROM gym_reviews WHERE user_id = $1 ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var reviews []models.GymReview
+	for rows.Next() {
+		var review models.GymReview
+		if err := rows.Scan(&review.ID, &review.GymID, &review.UserID, &review.Rating, &review.Comment, &review.CreatedAt); err != nil {
+			return nil, err
+		}
+		reviews = append(reviews, review)
+	}
+	return reviews, rows.Err()
+}
+
+func (s *Store) AnonymizeReviewsByUser(userID string) error {
+	_, err := s.db.Exec(`UPDATE gym_reviews SET comment = '[deleted]' WHERE user_id = $1`, userID)
+	return err
+}
+
 func (s *Store) Search(name string, limit int, cursor *pagination.ScoreDescCursor, prefix bool) (pagination.Paginated[models.GymSearchResult], error) {
 	if limit <= 0 {
 		return pagination.Paginated[models.GymSearchResult]{}, pagination.ErrInvalidLimit
